@@ -16,8 +16,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# تأكد من إضافة TELEGRAM_BOT_TOKEN في إعدادات المنصة (Environment Variables)
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+# تم وضع التوكن مباشرة هنا
+BOT_TOKEN = "8131991575:AAG_192aVJOaDiyMeqKsQ-PHR2KE6WWdF9o"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 CHANNEL_ID = -1003872259900
