@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # تم وضع التوكن مباشرة هنا
-BOT_TOKEN = "8131991575:AAG_192aVJOaDiyMeqKsQ-PHR2KE6WWdF9o"
+BOT_TOKEN = "8915584897:AAFIEPz_NeIEJa7jJUvstZvRY_-DnD65bps"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 CHANNEL_ID = -1003872259900
