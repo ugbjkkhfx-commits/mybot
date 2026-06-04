@@ -146,7 +146,7 @@ def reset_session(chat_id: int) -> None:
 def is_admin(chat_id: int) -> bool:
     return ADMIN_ID != 0 and chat_id == ADMIN_ID
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━ JSON FILES ━━━━━━━━━━━━━━━��━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━ JSON FILES ━━━━━━━━━━━━━━━━━━━━━━━━
 
 def load_json_set(path: str) -> set[int]:
     if os.path.exists(path):
@@ -200,15 +200,6 @@ SUPPORTED_PLATFORMS = {
     "facebook":  re.compile(r"(https?://)?(www\.|m\.|fb\.)?(facebook\.com|fb\.watch)/\S+", re.IGNORECASE),
     "kwai":      re.compile(r"(https?://)?(www\.)?kwai\.(com|app)/\S+", re.IGNORECASE),
     "pinterest": re.compile(r"(https?://)?(www\.|pin\.)?pinterest\.(com|co\.\w+)/\S+", re.IGNORECASE),
-}
-
-PLATFORM_EMOJI = {
-    "tiktok":    "🎵",
-    "instagram": "📸",
-    "snapchat":  "👻",
-    "facebook":  "📘",
-    "kwai":      "🎬",
-    "pinterest": "📌",
 }
 
 USER_AGENTS = [
@@ -316,7 +307,7 @@ def find_downloaded_file(tmpdir: str, ext: str) -> str:
 
 def _build_main_keyboard(chat_id: int = None) -> types.ReplyKeyboardMarkup:
     if chat_id and is_admin(chat_id):
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, one_time_keyboard=False)
         kb.add(
             types.KeyboardButton("📥 تحميل دفعة واحدة"),
             types.KeyboardButton("🚀 استنساخ كامل"),
@@ -424,37 +415,37 @@ def is_rate_limit(exc: Exception) -> bool:
 def panel_text() -> str:
     s = get_stats()
     lines = [
-        "*لوحة التحكم*\n",
-        f"اجمالي المستخدمين: *{s['total']}*",
-        f"نشطون: *{s['active']}*",
-        f"حظروا البوت: *{s['blocked']}*",
+        "📊 *لوحة التحكم*\n",
+        f"👥 إجمالي المستخدمين: *{s['total']}*",
+        f"✅ نشطون: *{s['active']}*",
+        f"🚫 حظروا البوت: *{s['blocked']}*",
     ]
     if s["last_bc"]:
         bc = s["last_bc"]
         lines.append(
-            f"\n*اخر اذاعة* ({bc['sent_at'][:16]})\n"
-            f"  وصل: {bc['delivered']} | "
-            f"حظر: {bc['blocked']} | "
-            f"فشل: {bc['failed']}"
+            f"\n🔔 *آخر إذاعة* ({bc['sent_at'][:16]})\n"
+            f"✓ وصل: {bc['delivered']} | "
+            f"✕ حظر: {bc['blocked']} | "
+            f"✗ فشل: {bc['failed']}"
         )
     return "\n".join(lines)
 
 def _welcome_text(first_name: str) -> str:
     return (
-        f"أهلاً بك يا <b>{first_name}</b> في بوت تحميل من السوشيال ميديا! 🌹\n"
-        "بـوتـنـا سـهـل الاسـتـخـدام..\n"
-        "كـل مـا عـلـي��ك فـعـلـه هـو إرسـال الـرابط أو إعـادة تـوجـيـهـه إلـيـنـا.\n\n"
-        "نـحـن لا نـضـع اشـتـراكـاً إجـبـاريـاً في الـوقـت الـحـالـي.. لـكـن قـد نـضـعـه في الـمـسـتـقـبـل.\n\n"
-        "الـبـوت لا يـحـتـوي عـلى رسـائـل مـزعـجـة أو إعـلانـات ومـا شـابـه.\n\n"
-        "يـمـكـنـك الـتـحـمـيـل مـن:\n"
-        "• تـيـك تـوك\n"
-        "• إنـسـتـغـرام\n"
-        "• فـيـسـبـوك\n"
-        "• بـيـنـتـرسـت\n"
-        "بـأفـضـل جـودة مـوجـودة.\n\n"
-        "الـبـوت قـد يـتـوقـف أحـيـانـاً بـسـبـب الـصـيـانـة أو الـتـعـديل..\n"
-        "لـكـن في الأيـام الـمـقـبـلـة، لـن يـتـوقـف بـإذن الله.\n\n"
-        "شـكـراً لـكـم! ✨"
+        f"👋 أهلا بك يا <b>{first_name}</b> في بوت تحميل من السوشيال ميديا! 🎵\n\n"
+        f"<b>ما يمكنك تحميله:</b>\n"
+        f"🎵 تيك توك\n"
+        f"📸 إنستغرام\n"
+        f"📘 فيسبوك\n"
+        f"📌 بيتريست\n\n"
+        f"<b>كيف تستخدم البوت:</b>\n"
+        f"• أرسل رابط أي فيديو\n"
+        f"• أو أرسل اسم حساب تيك توك\n"
+        f"• البوت يحمله بأفضل جودة ✅\n\n"
+        f"<b>معلومات مهمة:</b>\n"
+        f"• بدون اشتراكات إجبارية\n"
+        f"• بدون إعلانات مزعجة\n"
+        f"• البوت قد يتوقف للصيانة أحياناً"
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━ STREAMING ━━━━━━━━━━━━━━━━━━━━━━━━
@@ -686,11 +677,11 @@ def broadcast_worker(admin_id: int, msg_to_copy: types.Message,
     )
 
     summary = (
-        f"اكتملت الاذاعة!\n\n"
-        f"وصلت الى: *{delivered}* مستخدم\n"
-        f"حظروا البوت: *{bk_count}*\n"
-        f"فشل في الارسال: *{failed}*\n"
-        f"الاجمالي: {total}"
+        f"✅ اكتملت الاذاعة!\n\n"
+        f"✓ وصلت الى: *{delivered}* مستخدم\n"
+        f"🚫 حظروا البوت: *{bk_count}*\n"
+        f"✗ فشل في الارسال: *{failed}*\n"
+        f"📊 الاجمالي: {total}"
     )
     safe_edit(admin_id, status_msg_id, summary, parse_mode="Markdown")
 
@@ -1027,7 +1018,7 @@ def handle_message(message: telebot.types.Message) -> None:
 
                 bot.send_message(
                     chat_id,
-                    f"تم تسجيل الحساب: *{display}*\n\nاختر الاجراء:",
+                    f"✅ تم تسجيل الحساب: *{display}*\n\n📋 اختر الاجراء:",
                     parse_mode="Markdown",
                     reply_markup=_build_main_keyboard(chat_id),
                 )
