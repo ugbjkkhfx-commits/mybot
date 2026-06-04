@@ -14,7 +14,6 @@ from contextlib import contextmanager
 import telebot
 from telebot import types
 import yt_dlp
-from keep_alive import keep_alive
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -147,7 +146,7 @@ def reset_session(chat_id: int) -> None:
 def is_admin(chat_id: int) -> bool:
     return ADMIN_ID != 0 and chat_id == ADMIN_ID
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━ JSON FILES ━━━━━━━━━━���━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━ JSON FILES ━━━━━━━━━━━━━━━��━━━━━━━━
 
 def load_json_set(path: str) -> set[int]:
     if os.path.exists(path):
@@ -346,7 +345,7 @@ def batch_done_inline(has_more: bool) -> types.InlineKeyboardMarkup:
         )
     else:
         kb.add(
-            types.InlineKeyboardButton("🔄 تغيير الحسا��", callback_data="change_profile")
+            types.InlineKeyboardButton("🔄 تغيير الحساب", callback_data="change_profile")
         )
     return kb
 
@@ -444,7 +443,7 @@ def _welcome_text(first_name: str) -> str:
     return (
         f"أهلاً بك يا <b>{first_name}</b> في بوت تحميل من السوشيال ميديا! 🌹\n"
         "بـوتـنـا سـهـل الاسـتـخـدام..\n"
-        "كـل مـا عـلـيـك فـعـلـه هـو إرسـال الـرابط أو إعـادة تـوجـيـهـه إلـيـنـا.\n\n"
+        "كـل مـا عـلـي��ك فـعـلـه هـو إرسـال الـرابط أو إعـادة تـوجـيـهـه إلـيـنـا.\n\n"
         "نـحـن لا نـضـع اشـتـراكـاً إجـبـاريـاً في الـوقـت الـحـالـي.. لـكـن قـد نـضـعـه في الـمـسـتـقـبـل.\n\n"
         "الـبـوت لا يـحـتـوي عـلى رسـائـل مـزعـجـة أو إعـلانـات ومـا شـابـه.\n\n"
         "يـمـكـنـك الـتـحـمـيـل مـن:\n"
@@ -458,7 +457,7 @@ def _welcome_text(first_name: str) -> str:
         "شـكـراً لـكـم! ✨"
     )
 
-# ━━━��━━━━━━━━━━━━━━━━━━━━ STREAMING ━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━ STREAMING ━━━━━━━━━━━━━━━━━━━━━━━━
 
 def run_streaming_download(
     chat_id: int,
@@ -1092,7 +1091,6 @@ def handle_media(message: types.Message) -> None:
 if __name__ == "__main__":
     os.makedirs("downloads", exist_ok=True)
     init_db()
-    keep_alive()
     bot.set_my_commands([
         telebot.types.BotCommand("start", "رسالة البدء"),
         telebot.types.BotCommand("panel", "لوحة التحكم"),
