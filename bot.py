@@ -6,52 +6,56 @@ BOT_TOKEN = "8131991575:AAGCjGh5dRX0vJXojsC9VgOZez0-RDRT3fM"
 ADMIN_ID = 1520960859
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- دالة بناء الأزرار الذكية ---
-def get_user_keyboard(user_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+# --- دالة بناء الأزرار المدمجة داخل الرسالة ---
+def get_inline_keyboard(user_id):
+    markup = types.InlineKeyboardMarkup(row_width=1)
     # أزرار للجميع
     markup.add(
-        types.KeyboardButton("📥 تحميل دفعة واحدة"),
-        types.KeyboardButton("🚀 استنساخ كامل")
+        types.InlineKeyboardButton("📥 تحميل دفعة واحدة", callback_data="batch"),
+        types.InlineKeyboardButton("🚀 استنساخ كامل", callback_data="clone")
     )
-    # شرط الأدمن (لن تظهر هذه الأزرار لأي شخص غيرك)
+    # أزرار الأدمن (تظهر لك فقط)
     if user_id == ADMIN_ID:
         markup.add(
-            types.KeyboardButton("📊 لوحة التحكم"),
-            types.KeyboardButton("📡 إذاعة رسالة")
+            types.InlineKeyboardButton("📊 لوحة التحكم", callback_data="panel"),
+            types.InlineKeyboardButton("📡 إذاعة رسالة", callback_data="broadcast")
         )
     return markup
 
-# --- رسالة الترحيب ---
+# --- رسالة الترحيب مع الأزرار ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     welcome_text = (
         "مرحباً بك في بوت التحميل! 📥\n\n"
         "ما يمكنك تحميله:\n"
-        "🎵 تيك توك\n📷 إنستغرام\n📖 فيسبوك\n📌 بينتريست\n\n"
+        "🎵 تيك توك | 📷 إنستغرام | 📖 فيسبوك | 📌 بينتريست\n\n"
         "استخدم الأزرار أدناه للبدء:"
     )
+    # هنا تظهر الأزرار داخل الرسالة كما طلبت
     bot.send_message(
         message.chat.id, 
         welcome_text, 
-        reply_markup=get_user_keyboard(message.from_user.id)
+        reply_markup=get_inline_keyboard(message.from_user.id)
     )
 
-# --- منع ظهور أزرار الأدمن للمستخدمين ---
-@bot.message_handler(func=lambda m: m.text in ["📊 لوحة التحكم", "📡 إذاعة رسالة"])
-def admin_only(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⚠️ عذراً، هذه الخاصية للأدمن فقط.")
-    else:
-        # هنا تضع منطق لوحة التحكم الخاصة بك
-        bot.reply_to(message, "أهلاً بك يا أدمن في لوحة التحكم.")
-
-# --- باقي منطق البوت (التحميل والاستنساخ) ---
-@bot.message_handler(func=lambda m: True)
-def handle_all_messages(message):
-    if message.text == "📥 تحميل دفعة واحدة":
-        bot.reply_to(message, "أرسل الروابط وسأبدأ التحميل.")
-    elif message.text == "🚀 استنساخ كامل":
-        bot.reply_to(message, "أرسل رابط الحساب أولاً.")
+# --- معالجة الضغط على الأزرار ---
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    user_id = call.from_user.id
+    
+    if call.data == "batch":
+        bot.answer_callback_query(call.id, "جاري البدء...")
+        bot.send_message(call.message.chat.id, "أرسل روابط الفيديوهات دفعة واحدة 📥")
+        
+    elif call.data == "clone":
+        bot.answer_callback_query(call.id, "جاري البدء...")
+        bot.send_message(call.message.chat.id, "أرسل رابط الحساب أولاً للبدء في الاستنساخ 🚀")
+        
+    elif call.data == "panel" and user_id == ADMIN_ID:
+        bot.answer_callback_query(call.id, "أهلاً أدمن")
+        bot.send_message(call.message.chat.id, "📊 لوحة التحكم: هنا ستظهر الإحصائيات.")
+        
+    elif call.data in ["panel", "broadcast"] and user_id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⚠️ هذه الخاصية للأدمن فقط!")
 
 bot.infinity_polling()
