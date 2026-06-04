@@ -1,52 +1,59 @@
 import telebot
 from telebot import types
 
-# هذا التوكن الخاص بك
+# ضع التوكن الخاص بك هنا
 BOT_TOKEN = "8131991575:AAGCjGh5dRX0vJXojsC9VgOZez0-RDRT3fM"
 ADMIN_ID = 1520960859
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- الكيبورد الوحيد في البوت ---
-def get_keyboard(user_id):
-    # ننشئ لوحة مفاتيح فارغة
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+# --- دالة الأزرار المدمجة (داخل الرسالة) ---
+def get_inline_keyboard(user_id):
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
-    # الأزرار العامة
+    # أزرار للجميع (داخل الرسالة)
     markup.add(
-        types.KeyboardButton("📥 تحميل دفعة واحدة"),
-        types.KeyboardButton("👤 استنساخ استنساخ")
+        types.InlineKeyboardButton("📥 تحميل دفعة واحدة", callback_data="batch"),
+        types.InlineKeyboardButton("استنساخ الحساب 👤", callback_data="clone")
     )
     
-    # الأزرار الإدارية (لن تضاف إلا للأدمن فقط)
+    # أزرار الأدمن (تظهر لك فقط داخل رسالتك)
     if user_id == ADMIN_ID:
         markup.add(
-            types.KeyboardButton("📊 لوحة التحكم"),
-            types.KeyboardButton("📡 إذاعة رسالة")
+            types.InlineKeyboardButton("📊 لوحة التحكم", callback_data="panel"),
+            types.InlineKeyboardButton("📡 إذاعة رسالة", callback_data="broadcast")
         )
     return markup
 
 # --- رسالة الترحيب ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    # نقوم بإرسال الكيبورد الخاص بهذا المستخدم تحديداً
+    welcome_text = (
+        "مرحباً بك في بوت التحميل! 📥\n\n"
+        "أرسل رابط أي فيديو وسأقوم بتحميله لك فوراً.\n"
+        "يمكنك استخدام الأزرار أدناه للعمليات الكبيرة:"
+    )
+    # الأزرار ستظهر الآن داخل الرسالة كما طلبت
     bot.send_message(
         message.chat.id, 
-        "مرحباً بك! أرسل الرابط مباشرة للتحميل.", 
-        reply_markup=get_keyboard(message.from_user.id)
+        welcome_text, 
+        reply_markup=get_inline_keyboard(message.from_user.id)
     )
 
-# --- معالجة الأزرار (حماية الأزرار الإدارية) ---
-@bot.message_handler(func=lambda m: True)
-def handle_msg(message):
-    if message.text in ["📊 لوحة التحكم", "📡 إذاعة رسالة"]:
-        if message.from_user.id != ADMIN_ID:
-            # إذا ضغط مستخدم عادي على زر إدارة، لا يفعل البوت شيئاً أو يتجاهله
-            return
+# --- معالجة الأزرار (بدون أي اشتراك إجباري) ---
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    # لا يوجد هنا أي تحقق من اشتراك!
+    if call.data == "batch":
+        bot.answer_callback_query(call.id, "أرسل الروابط دفعة واحدة")
+        bot.send_message(call.message.chat.id, "📥 أرسل الروابط في رسالة واحدة.")
+    elif call.data == "clone":
+        bot.answer_callback_query(call.id, "جاري الاستنساخ")
+        bot.send_message(call.message.chat.id, "👤 أرسل رابط الحساب.")
+    elif call.data in ["panel", "broadcast"]:
+        if call.from_user.id == ADMIN_ID:
+            bot.answer_callback_query(call.id, "أهلاً أدمن")
         else:
-            bot.reply_to(message, "مرحباً أدمن.")
-    else:
-        # هنا يكمل باقي عمل البوت الخاص بك
-        pass
+            bot.answer_callback_query(call.id, "هذه الميزة للإدارة فقط", show_alert=True)
 
 bot.infinity_polling()
