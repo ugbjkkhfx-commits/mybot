@@ -12,7 +12,7 @@ def get_inline_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("📥 تحميل دفعة واحدة", callback_data="batch"),
-        types.InlineKeyboardButton("استنساخ الحساب 👤", callback_data="clone")
+        types.InlineKeyboardButton("👤 استنساخ الحساب", callback_data="clone")
     )
     if user_id == ADMIN_ID:
         markup.add(
