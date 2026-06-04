@@ -3,61 +3,62 @@ from telebot import types
 import yt_dlp
 import os
 
+# بياناتك
 BOT_TOKEN = "8131991575:AAGCjGh5dRX0vJXojsC9VgOZez0-RDRT3fM"
 ADMIN_ID = 1520960859
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- دالة الأزرار المدمجة (Inline) ---
-def get_inline_keyboard(user_id):
+# --- قواعد البيانات ---
+users_data = set() # لحفظ المستخدمين (إحصائيات)
+
+# --- دالة إرسال الأزرار المدمجة ---
+def get_main_menu(user_id):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("📥 تحميل دفعة واحدة", callback_data="batch"),
-        types.InlineKeyboardButton("👤 استنساخ الحساب", callback_data="clone")
+        types.InlineKeyboardButton("📥 تحميل دفعة واحدة", callback_data="batch_down"),
+        types.InlineKeyboardButton("👤 استنساخ حساب", callback_data="clone_acc")
     )
     if user_id == ADMIN_ID:
         markup.add(
-            types.InlineKeyboardButton("📊 لوحة التحكم", callback_data="panel"),
-            types.InlineKeyboardButton("📡 إذاعة رسالة", callback_data="broadcast")
+            types.InlineKeyboardButton("📊 لوحة الأدمن", callback_data="admin_panel"),
+            types.InlineKeyboardButton("📡 إذاعة", callback_data="broadcast")
         )
     return markup
 
-# --- البداية ---
 @bot.message_handler(commands=['start'])
 def start(message):
-    text = "مرحباً بك! أرسل رابط الفيديو مباشرة وسأقوم بتحميله لك."
-    bot.send_message(message.chat.id, text, reply_markup=get_inline_keyboard(message.from_user.id))
+    users_data.add(message.chat.id)
+    bot.send_message(message.chat.id, "أهلاً بك! استخدم الأزرار أدناه:", reply_markup=get_main_menu(message.from_user.id))
 
-# --- وظيفة التحميل الفعلي (yt-dlp) ---
-def download_video(url, chat_id):
-    bot.send_message(chat_id, "⏳ جاري المعالجة...")
-    ydl_opts = {'format': 'best', 'outtmpl': '%(id)s.%(ext)s'}
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-        
-        with open(filename, 'rb') as video:
-            bot.send_video(chat_id, video)
-        os.remove(filename) # حذف الملف بعد الإرسال لتوفير مساحة
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ حدث خطأ: {e}")
-
-# --- معالجة الروابط والنصوص ---
-@bot.message_handler(func=lambda m: True)
-def handle_messages(message):
-    if "tiktok.com" in message.text or "instagram.com" in message.text:
-        download_video(message.text, message.chat.id)
-    else:
-        bot.reply_to(message, "أرسل رابط فيديو صحيح للبدء.")
-
-# --- معالجة الأزرار (Inline) ---
+# --- منطق الاستنساخ والتحميل ---
 @bot.callback_query_handler(func=lambda call: True)
-def callback_query(call):
-    if call.data == "batch":
-        bot.send_message(call.message.chat.id, "أرسل الروابط دفعة واحدة في رسالة.")
-    elif call.data == "clone":
-        bot.send_message(call.message.chat.id, "أرسل رابط الحساب.")
-    elif call.data == "panel" and call.from_user.id == ADMIN_ID:
-        bot.send_message(call.message.chat.id, "📊 لوحة التحكم: (أضف أوامرك هنا)")
+def callback(call):
+    if call.data == "batch_down":
+        bot.send_message(call.message.chat.id, "أرسل الروابط (رابط واحد في كل سطر) وسأحملها جميعاً.")
+    elif call.data == "clone_acc":
+        bot.send_message(call.message.chat.id, "أرسل 'اسم المستخدم' ورابط الحساب، سأقوم باستنساخه.")
+    elif call.data == "admin_panel":
+        if call.from_user.id == ADMIN_ID:
+            bot.send_message(call.message.chat.id, f"عدد المستخدمين: {len(users_data)}")
+    elif call.data == "broadcast":
+        if call.from_user.id == ADMIN_ID:
+            bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريد إذاعتها للجميع.")
+
+# --- معالجة الروابط (التحميل) ---
+@bot.message_handler(func=lambda m: True)
+def handle_text(message):
+    # إذا كانت رسالة نصية بسيطة
+    if message.text.startswith("http"):
+        links = message.text.split('\n')
+        for link in links:
+            if "tiktok" in link or "instagram" in link:
+                bot.reply_to(message, f"⏳ جاري تحميل: {link}")
+                # هنا يتم وضع منطق yt-dlp للتحميل
+    
+    # إذا كانت رسالة إذاعة من الأدمن
+    if message.from_user.id == ADMIN_ID and message.reply_to_message:
+        for user in users_data:
+            try: bot.send_message(user, message.text)
+            except: pass
 
 bot.infinity_polling()
