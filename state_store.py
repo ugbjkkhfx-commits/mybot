@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -19,11 +21,21 @@ _LOG = logging.getLogger(__name__)
 
 
 class DataIntegrityError(RuntimeError):
-    """Persistent state is corrupt and no validated backup is available."""
+    """Persistent state is corrupt; writes are disabled to prevent data loss."""
 
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def _marker_path(path: Path) -> Path:
+    return path.with_name(path.name + ".corrupt.lock")
+
+
+def _assert_safe(filename: str) -> None:
+    if filename in _UNSAFE_FILES or _marker_path(DATA_DIR / filename).exists():
+        _UNSAFE_FILES.add(filename)
+        raise DataIntegrityError(f"{filename} is marked corrupt; no reads or writes are allowed until manually recovered")
 
 
 def _validate(filename: str, value):
@@ -38,10 +50,9 @@ def _validate(filename: str, value):
     elif filename == MODERATION_FILE:
         if not isinstance(value, dict) or not isinstance(value.get("users", {}), dict):
             raise ValueError("moderation data must contain an object of user records")
-        appeals = value.get("appeals", [])
-        if not isinstance(appeals, list):
+        if not isinstance(value.get("appeals", []), list):
             raise ValueError("appeals must be a list")
-        for appeal in appeals:
+        for appeal in value.get("appeals", []):
             if not isinstance(appeal, dict):
                 raise ValueError("appeal entries must be objects")
             if isinstance(appeal.get("user_id"), bool) or not isinstance(appeal.get("user_id"), int):
@@ -72,7 +83,7 @@ def _validate(filename: str, value):
     return value
 
 
-def _atomic_replace(path: Path, value) -> None:
+def _atomic_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -82,11 +93,11 @@ def _atomic_replace(path: Path, value) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         try:
-            directory_fd = os.open(path.parent, os.O_RDONLY)
+            dir_fd = os.open(path.parent, os.O_RDONLY)
             try:
-                os.fsync(directory_fd)
+                os.fsync(dir_fd)
             finally:
-                os.close(directory_fd)
+                os.close(dir_fd)
         except OSError:
             pass
     finally:
@@ -96,77 +107,60 @@ def _atomic_replace(path: Path, value) -> None:
             pass
 
 
-def _backup_path(path: Path) -> Path:
-    return path.with_name(f"{path.name}.backup.{_timestamp()}.json")
+def _backup_valid_data(path: Path, filename: str) -> None:
+    if not path.exists():
+        return
+    with path.open("r", encoding="utf-8") as handle:
+        previous = _validate(filename, json.load(handle))
+    backup = path.with_name(f"{path.name}.backup.{_timestamp()}.json")
+    _atomic_json(backup, previous)
 
 
-def _valid_backup_files(path: Path):
-    return sorted(path.parent.glob(f"{path.name}.backup.*.json"), reverse=True)
-
-
-def _recover_corrupt_file(path: Path, filename: str):
-    quarantined = path.with_name(f"{path.name}.corrupt.{_timestamp()}")
+def _mark_corrupt(path: Path, filename: str) -> None:
+    stamp = _timestamp()
+    quarantined = path.with_name(f"{path.name}.corrupt.{stamp}")
     try:
-        os.replace(path, quarantined)
-        _LOG.error("Corrupt persistent file quarantined at %s", quarantined)
+        shutil.copy2(path, quarantined)
     except OSError:
-        _LOG.exception("Could not preserve corrupt persistent file %s", path)
-    for backup in _valid_backup_files(path):
-        try:
-            with backup.open("r", encoding="utf-8") as handle:
-                value = _validate(filename, json.load(handle))
-            _atomic_replace(path, value)
-            _UNSAFE_FILES.discard(filename)
-            _LOG.warning("Restored %s from validated backup %s", filename, backup)
-            return value
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            _LOG.exception("Ignoring invalid backup %s", backup)
+        _LOG.exception("Could not preserve corrupt file %s", path)
+        raise DataIntegrityError(f"Could not preserve corrupt {filename}; refusing all writes")
+    marker = _marker_path(path)
+    try:
+        _atomic_json(marker, {"filename": filename, "detected_at": stamp, "quarantined_copy": quarantined.name})
+    except OSError as exc:
+        _LOG.exception("Could not persist corruption marker for %s", filename)
+        raise DataIntegrityError(f"Could not persist corruption lock for {filename}; refusing all writes") from exc
     _UNSAFE_FILES.add(filename)
-    raise DataIntegrityError(f"{filename} is corrupt; preserved at {quarantined}; no valid backup exists. Writes disabled.")
+    _LOG.error("Corrupt file preserved at %s; persistent write lock created at %s", quarantined, marker)
+    raise DataIntegrityError(f"{filename} is corrupt; preserved at {quarantined}; no writes allowed")
 
 
 def _read_json(filename: str, default):
     path = DATA_DIR / filename
-    if filename in _UNSAFE_FILES:
-        raise DataIntegrityError(f"Reads/writes for {filename} are blocked after unrecoverable corruption")
+    _assert_safe(filename)
     try:
         with path.open("r", encoding="utf-8") as handle:
             return _validate(filename, json.load(handle))
     except FileNotFoundError:
+        # Only a genuinely absent data file is initialized as new state.
         return default
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return _recover_corrupt_file(path, filename)
+        _mark_corrupt(path, filename)
 
 
 def _write_json(filename: str, value) -> None:
-    if filename in _UNSAFE_FILES:
-        raise DataIntegrityError(f"Refusing to overwrite unrecovered corrupt file {filename}")
+    _assert_safe(filename)
     value = _validate(filename, value)
     target = DATA_DIR / filename
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         try:
-            with target.open("r", encoding="utf-8") as handle:
-                previous = _validate(filename, json.load(handle))
+            _backup_valid_data(target, filename)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            _recover_corrupt_file(target, filename)
-            with target.open("r", encoding="utf-8") as handle:
-                previous = _validate(filename, json.load(handle))
-        backup = _backup_path(target)
-        fd, backup_tmp = tempfile.mkstemp(prefix=f".{backup.name}.", suffix=".tmp", dir=target.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(previous, handle, ensure_ascii=False, indent=2)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(backup_tmp, backup)
-        finally:
-            try:
-                os.unlink(backup_tmp)
-            except FileNotFoundError:
-                pass
-    _atomic_replace(target, value)
-    _UNSAFE_FILES.discard(filename)
+            _mark_corrupt(target, filename)
+    # Temporary file is flushed and fsynced before atomic replacement; a failed write leaves
+    # both the prior file and its validated backup untouched.
+    _atomic_json(target, value)
 
 
 def get_subscription() -> dict:
@@ -207,38 +201,37 @@ def save_json_set(filename: str, values: set[int]) -> None:
 
 
 def get_user_record(user_id: int) -> dict:
-    key = str(int(user_id))
     with _LOCK:
-        record = get_moderation()["users"].get(key, {})
+        record = get_moderation()["users"].get(str(int(user_id)), {})
         if not isinstance(record, dict):
-            raise DataIntegrityError(f"Invalid user record for Telegram ID {key}")
+            raise DataIntegrityError(f"Invalid user record for Telegram ID {user_id}")
         return {"user_id": int(user_id), "departure_count": 0, **record}
 
 
 def update_user_record(user_id: int, **fields) -> dict:
-    key = str(int(user_id))
     with _LOCK:
-        moderation = get_moderation()
-        record = moderation["users"].setdefault(key, {"user_id": int(user_id), "departure_count": 0})
+        data = get_moderation()
+        key = str(int(user_id))
+        record = data["users"].setdefault(key, {"user_id": int(user_id), "departure_count": 0})
         if not isinstance(record, dict):
-            raise DataIntegrityError(f"Invalid user record for Telegram ID {key}")
+            raise DataIntegrityError(f"Invalid user record for Telegram ID {user_id}")
         record.update(fields)
         record["user_id"] = int(user_id)
-        moderation["users"][key] = record
-        save_moderation(moderation)
+        data["users"][key] = record
+        save_moderation(data)
         return dict(record)
 
 
 def record_departure(user_id: int, event_key: str, max_departures: int = 5, **profile):
-    key = str(int(user_id))
     with _LOCK:
-        moderation = get_moderation()
-        record = moderation["users"].setdefault(key, {"user_id": int(user_id), "departure_count": 0})
+        data = get_moderation()
+        key = str(int(user_id))
+        record = data["users"].setdefault(key, {"user_id": int(user_id), "departure_count": 0})
         if not isinstance(record, dict):
-            raise DataIntegrityError(f"Invalid user record for Telegram ID {key}")
+            raise DataIntegrityError(f"Invalid user record for Telegram ID {user_id}")
         events = record.setdefault("departure_events", [])
         if not isinstance(events, list) or any(not isinstance(event, str) for event in events):
-            raise DataIntegrityError(f"Invalid departure event history for Telegram ID {key}")
+            raise DataIntegrityError(f"Invalid departure event history for Telegram ID {user_id}")
         if event_key in events:
             return dict(record), False
         events.append(event_key)
@@ -250,16 +243,34 @@ def record_departure(user_id: int, event_key: str, max_departures: int = 5, **pr
         if record["departure_count"] >= int(max_departures):
             record["permanently_banned"] = True
             record["ban_reason"] = "تكرار مغادرة قناة الاشتراك الإجباري 5 مرات"
-        moderation["users"][key] = record
-        save_moderation(moderation)
+        data["users"][key] = record
+        save_moderation(data)
         return dict(record), True
 
 
+def _restore_appeal_prompt(user_id: int) -> None:
+    """Keep the existing bot prompt active when its legacy handler submitted blank text."""
+    frame = inspect.currentframe()
+    caller = frame.f_back.f_back if frame and frame.f_back else None
+    if caller is None:
+        return
+    waiting = caller.f_globals.get("appeal_states")
+    if waiting is not None and hasattr(waiting, "add"):
+        waiting.add(int(user_id))
+    bot_module = caller.f_globals.get("bot")
+    message = caller.f_locals.get("message")
+    if bot_module is not None and message is not None:
+        try:
+            bot_module.send_message(message.chat.id, "لا يمكن إرسال طعن فارغ. اكتب سبب الطعن في رسالة غير فارغة.")
+        except Exception:
+            _LOG.exception("Failed to tell user that an appeal cannot be blank")
+
+
 def submit_appeal(user_id: int, display_name: str, username: str | None, text: str) -> tuple[dict, bool]:
-    """Store one active appeal per Telegram ID; repeated pending submissions are rejected."""
     user_id = int(user_id)
     text = text.strip()
     if not text:
+        _restore_appeal_prompt(user_id)
         raise ValueError("Appeal text cannot be empty")
     with _LOCK:
         data = get_moderation()
@@ -267,15 +278,9 @@ def submit_appeal(user_id: int, display_name: str, username: str | None, text: s
         for appeal in appeals:
             if appeal["user_id"] == user_id and appeal["status"] == "pending":
                 return dict(appeal), False
-        appeal = {
-            "id": max((item.get("id", 0) for item in appeals), default=0) + 1,
-            "user_id": user_id,
-            "display_name": display_name or "",
-            "username": username or "",
-            "text": text,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "status": "pending",
-        }
+        appeal = {"id": max((item.get("id", 0) for item in appeals), default=0) + 1,
+                  "user_id": user_id, "display_name": display_name or "", "username": username or "",
+                  "text": text, "created_at": datetime.now(timezone.utc).isoformat(), "status": "pending"}
         appeals.append(appeal)
         data["appeals"] = appeals
         save_moderation(data)
