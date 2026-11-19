@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 import os
@@ -142,7 +141,6 @@ def _read_json(filename: str, default):
         with path.open("r", encoding="utf-8") as handle:
             return _validate(filename, json.load(handle))
     except FileNotFoundError:
-        # Only a genuinely absent data file is initialized as new state.
         return default
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         _mark_corrupt(path, filename)
@@ -158,8 +156,6 @@ def _write_json(filename: str, value) -> None:
             _backup_valid_data(target, filename)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             _mark_corrupt(target, filename)
-    # Temporary file is flushed and fsynced before atomic replacement; a failed write leaves
-    # both the prior file and its validated backup untouched.
     _atomic_json(target, value)
 
 
@@ -248,29 +244,11 @@ def record_departure(user_id: int, event_key: str, max_departures: int = 5, **pr
         return dict(record), True
 
 
-def _restore_appeal_prompt(user_id: int) -> None:
-    """Keep the existing bot prompt active when its legacy handler submitted blank text."""
-    frame = inspect.currentframe()
-    caller = frame.f_back.f_back if frame and frame.f_back else None
-    if caller is None:
-        return
-    waiting = caller.f_globals.get("appeal_states")
-    if waiting is not None and hasattr(waiting, "add"):
-        waiting.add(int(user_id))
-    bot_module = caller.f_globals.get("bot")
-    message = caller.f_locals.get("message")
-    if bot_module is not None and message is not None:
-        try:
-            bot_module.send_message(message.chat.id, "لا يمكن إرسال طعن فارغ. اكتب سبب الطعن في رسالة غير فارغة.")
-        except Exception:
-            _LOG.exception("Failed to tell user that an appeal cannot be blank")
-
-
 def submit_appeal(user_id: int, display_name: str, username: str | None, text: str) -> tuple[dict, bool]:
+    """Persist non-empty appeal text; UI state is managed by the bot handler."""
     user_id = int(user_id)
     text = text.strip()
     if not text:
-        _restore_appeal_prompt(user_id)
         raise ValueError("Appeal text cannot be empty")
     with _LOCK:
         data = get_moderation()

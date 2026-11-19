@@ -181,7 +181,7 @@ def _subscription_admin_keyboard():
 def _subscription_status_text() -> str:
     config = _subscription_config()
     if not config.get("chat_id"):
-        return "📢 إعداد الاشتراك الإجباري\nالحالة: غير مُعدّ\n\nأرسل رابط قناة عامة، أو أعد توجيه منشور من قناة خاصة."
+        return "📢 إعداد الاشتراك الإجباري\nالحالة: غير مُعدّ\n\nأرسل رابط قناة عامة، أو أعد توجيه منشور من القناة الخاصة."
     return ("📢 إعداد الاشتراك الإجباري\n" f"القناة: {html.escape(str(config.get('title') or 'غير معروف'))}\n"
             f"المعرّف: <code>{int(config['chat_id'])}</code>\n"
             f"الرابط: {html.escape(str(config.get('invite_link') or config.get('public_link') or 'غير متاح'))}\n"
@@ -706,13 +706,17 @@ def handle_text(message):
     if user is None or message.chat.type != "private":
         return
     if user.id in appeal_states:
+        text = (message.text or "").strip()
+        if not text:
+            bot.send_message(message.chat.id, "لا يمكن إرسال طعن فارغ. اكتب سبب الطعن في رسالة غير فارغة.")
+            return
+        appeal, created = state_store.submit_appeal(user.id, user.first_name or "", user.username, text)
         appeal_states.discard(user.id)
-        appeal, created = state_store.submit_appeal(user.id, user.first_name or "", user.username, message.text or "")
         if created:
             bot.send_message(message.chat.id, "✅ تم حفظ طعنك وإرساله إلى إدارة البوت للمراجعة.")
             notify_admin(f"📨 طعن جديد رقم #{appeal['id']} من {appeal.get('display_name') or 'مستخدم'} (ID: {user.id}). افتح صندوق الطعون من إعدادات المالك.")
         else:
-            bot.send_message(message.chat.id, "طلب الطعن السابق ما زال قيد المراجعة لدى إدارة ب��ت تحميل من السوشيال ميديا.")
+            bot.send_message(message.chat.id, "طلب الطعن السابق ما زال قيد ��لمراجعة لدى إدارة بوت تحميل من السوشيال ميديا.")
         return
     if not _check_access(user, message.chat.id):
         return
