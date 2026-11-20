@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
 
 OWNER_ID = 1520960859
@@ -46,8 +48,8 @@ def _replace_handler(handler_list, name: str, replacement) -> bool:
 
 
 def _password_for_user(user_id: int) -> bytes:
-    # ZIP password is the requested exact per-user value. The archive payload is
-    # independently encrypted with AES-GCM using BACKUP_MASTER_KEY.
+    # This is the actual WinZip AES ZIP password. The payload is also encrypted
+    # independently with AES-GCM using BACKUP_MASTER_KEY.
     return f"*{int(user_id)}#".encode("utf-8")
 
 
@@ -92,6 +94,68 @@ def _install_master_encryption(backup_service) -> None:
     backup_service._owner_crypto_installed = True
 
 
+def _install_nonblocking_backup_hooks(backup_service) -> None:
+    """Keep network retries off bot handler threads and report upload failures."""
+    if getattr(backup_service, "_owner_async_hooks_installed", False):
+        return
+
+    original_state_saved = backup_service.on_state_saved
+    original_upload = backup_service._upload_document
+    pending: set[tuple[str, str]] = set()
+    pending_lock = threading.Lock()
+    pending_event = threading.Event()
+    notice_lock = threading.Lock()
+    last_failure_notice = [0.0]
+
+    def worker() -> None:
+        while True:
+            pending_event.wait()
+            while True:
+                with pending_lock:
+                    tasks = tuple(pending)
+                    pending.clear()
+                    pending_event.clear()
+                if not tasks:
+                    break
+                for filename, data_dir in tasks:
+                    try:
+                        original_state_saved(filename, Path(data_dir))
+                    except Exception:
+                        _log.exception("Asynchronous backup snapshot failed for %s", filename)
+
+    def schedule_state_saved(filename: str, data_dir: Path) -> None:
+        # Coalesce repeated writes of the same state file: the worker snapshots
+        # the latest durable state, while Telegram uploads remain out of-band.
+        with pending_lock:
+            pending.add((filename, str(data_dir)))
+            pending_event.set()
+
+    def upload_with_owner_notice(path: Path, *, channel_id=None) -> bool:
+        succeeded = original_upload(path, channel_id=channel_id)
+        if succeeded:
+            with notice_lock:
+                last_failure_notice[0] = 0.0
+            return True
+
+        now = time.monotonic()
+        should_notify = False
+        with notice_lock:
+            if now - last_failure_notice[0] >= 1800:
+                last_failure_notice[0] = now
+                should_notify = True
+        if should_notify:
+            backup_service._notify_owner(
+                f"⚠️ فشل رفع ملف النسخ الاحتياطي {path.name} إلى Telegram. "
+                "حُفظ محليًا في قائمة إعادة المحاولة؛ تحقق من التوكن وصلاحيات قناة النسخ."
+            )
+        return False
+
+    backup_service.on_state_saved = schedule_state_saved
+    backup_service._upload_document = upload_with_owner_notice
+    threading.Thread(target=worker, name="telegram-backup-snapshot", daemon=True).start()
+    backup_service._owner_async_hooks_installed = True
+
+
 def _restore_document_handler(bot_module, backup_service, message) -> None:
     user = getattr(message, "from_user", None)
     if not user or int(user.id) != OWNER_ID:
@@ -115,7 +179,7 @@ def _restore_document_handler(bot_module, backup_service, message) -> None:
                                 else "✅ تم التحقق من النسخة؛ لا توجد بيانات ناقصة لاستعادتها.")
     except Exception as exc:
         _log.exception("Owner backup restore failed")
-        bot_module.bot.reply_to(message, f"تعذرت الاس��عادة ولم تُستبدل البيانات المحلية: {exc}")
+        bot_module.bot.reply_to(message, f"تعذرت الاستعادة ولم تُستبدل البيانات المحلية: {exc}")
 
 
 def install(bot_module) -> None:
@@ -126,6 +190,7 @@ def install(bot_module) -> None:
     import backup_service
 
     _install_master_encryption(backup_service)
+    _install_nonblocking_backup_hooks(backup_service)
     original_keyboard = bot_module._main_keyboard
 
     def owner_aware_keyboard():
