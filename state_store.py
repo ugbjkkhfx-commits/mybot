@@ -157,6 +157,13 @@ def _write_json(filename: str, value) -> None:
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             _mark_corrupt(target, filename)
     _atomic_json(target, value)
+    # Local atomic persistence remains authoritative. Remote backup errors never
+    # undo it; backup_service maintains an encrypted on-disk outbox for retries.
+    try:
+        import backup_service
+        backup_service.on_state_saved(filename, DATA_DIR)
+    except Exception:
+        _LOG.exception("Backup hook failed after local state was safely written")
 
 
 def get_subscription() -> dict:
@@ -210,7 +217,7 @@ def update_user_record(user_id: int, **fields) -> dict:
         key = str(int(user_id))
         record = data["users"].setdefault(key, {"user_id": int(user_id), "departure_count": 0})
         if not isinstance(record, dict):
-            raise DataIntegrityError(f"Invalid user record for Telegram ID {user_id}")
+            raise DataIntegrityError(f"Invalid moderation record for Telegram ID {user_id}")
         record.update(fields)
         record["user_id"] = int(user_id)
         data["users"][key] = record
@@ -224,7 +231,7 @@ def record_departure(user_id: int, event_key: str, max_departures: int = 5, **pr
         key = str(int(user_id))
         record = data["users"].setdefault(key, {"user_id": int(user_id), "departure_count": 0})
         if not isinstance(record, dict):
-            raise DataIntegrityError(f"Invalid user record for Telegram ID {user_id}")
+            raise DataIntegrityError(f"Invalid moderation record for Telegram ID {user_id}")
         events = record.setdefault("departure_events", [])
         if not isinstance(events, list) or any(not isinstance(event, str) for event in events):
             raise DataIntegrityError(f"Invalid departure event history for Telegram ID {user_id}")
