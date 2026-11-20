@@ -146,22 +146,52 @@ def _read_json(filename: str, default):
         _mark_corrupt(path, filename)
 
 
+def _appeals_by_user(value):
+    grouped = {}
+    for appeal in value.get("appeals", []):
+        if isinstance(appeal, dict) and str(appeal.get("user_id", "")).isdigit():
+            grouped.setdefault(int(appeal["user_id"]), []).append(appeal)
+    return grouped
+
+
+def _changed_user_ids(filename: str, previous, current) -> set[int]:
+    """Find only IDs whose persisted user-specific state actually changed."""
+    if filename in (USERS_FILE, BLOCKED_FILE):
+        before, after = set(previous or []), set(current or [])
+        return {int(user_id) for user_id in before.symmetric_difference(after)}
+    if filename != MODERATION_FILE:
+        return set()
+    before_users = previous.get("users", {}) if isinstance(previous, dict) else {}
+    after_users = current.get("users", {}) if isinstance(current, dict) else {}
+    ids = set()
+    for key in set(before_users) | set(after_users):
+        if before_users.get(key) != after_users.get(key) and str(key).isdigit():
+            ids.add(int(key))
+    before_appeals, after_appeals = _appeals_by_user(previous or {}), _appeals_by_user(current or {})
+    for user_id in set(before_appeals) | set(after_appeals):
+        if before_appeals.get(user_id, []) != after_appeals.get(user_id, []):
+            ids.add(user_id)
+    return ids
+
+
 def _write_json(filename: str, value) -> None:
     _assert_safe(filename)
     value = _validate(filename, value)
     target = DATA_DIR / filename
     target.parent.mkdir(parents=True, exist_ok=True)
+    default = {} if filename in (MODERATION_FILE, SUBSCRIPTION_FILE) else []
+    previous = _read_json(filename, default)
+    affected_user_ids = _changed_user_ids(filename, previous, value)
     if target.exists():
         try:
             _backup_valid_data(target, filename)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             _mark_corrupt(target, filename)
     _atomic_json(target, value)
-    # Local atomic persistence remains authoritative. Remote backup errors never
-    # undo it; backup_service maintains an encrypted on-disk outbox for retries.
+    # Local atomic persistence remains authoritative. Queue only affected users.
     try:
         import backup_service
-        backup_service.on_state_saved(filename, DATA_DIR)
+        backup_service.on_state_saved(filename, DATA_DIR, user_ids=affected_user_ids)
     except Exception:
         _LOG.exception("Backup hook failed after local state was safely written")
 
