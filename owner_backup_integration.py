@@ -94,6 +94,41 @@ def _install_master_encryption(backup_service) -> None:
     backup_service._owner_crypto_installed = True
 
 
+def _make_backup_scheduler(original_state_saved):
+    """Build a coalescing scheduler; None (legacy calls) means full reconciliation."""
+    pending: dict[tuple[str, str], set[int] | None] = {}
+    pending_lock = threading.Lock()
+    pending_event = threading.Event()
+
+    def schedule_state_saved(filename: str, data_dir: Path, user_ids=None) -> None:
+        key = (filename, str(data_dir))
+        affected = None if user_ids is None else {int(user_id) for user_id in user_ids}
+        with pending_lock:
+            if key not in pending:
+                pending[key] = affected
+            elif pending[key] is None or affected is None:
+                # Any legacy/full-reconciliation request subsumes narrower work.
+                pending[key] = None
+            else:
+                pending[key].update(affected)
+            pending_event.set()
+
+    def process_pending() -> int:
+        with pending_lock:
+            tasks = list(pending.items())
+            pending.clear()
+            if not pending:
+                pending_event.clear()
+        for (filename, data_dir), user_ids in tasks:
+            try:
+                original_state_saved(filename, Path(data_dir), user_ids=user_ids)
+            except Exception:
+                _log.exception("Asynchronous backup snapshot failed for %s", filename)
+        return len(tasks)
+
+    return schedule_state_saved, process_pending, pending_event
+
+
 def _install_nonblocking_backup_hooks(backup_service) -> None:
     """Keep network retries off bot handler threads and report upload failures."""
     if getattr(backup_service, "_owner_async_hooks_installed", False):
@@ -101,34 +136,15 @@ def _install_nonblocking_backup_hooks(backup_service) -> None:
 
     original_state_saved = backup_service.on_state_saved
     original_upload = backup_service._upload_document
-    pending: set[tuple[str, str]] = set()
-    pending_lock = threading.Lock()
-    pending_event = threading.Event()
+    schedule_state_saved, process_pending, pending_event = _make_backup_scheduler(original_state_saved)
     notice_lock = threading.Lock()
     last_failure_notice = [0.0]
 
     def worker() -> None:
         while True:
             pending_event.wait()
-            while True:
-                with pending_lock:
-                    tasks = tuple(pending)
-                    pending.clear()
-                    pending_event.clear()
-                if not tasks:
-                    break
-                for filename, data_dir in tasks:
-                    try:
-                        original_state_saved(filename, Path(data_dir))
-                    except Exception:
-                        _log.exception("Asynchronous backup snapshot failed for %s", filename)
-
-    def schedule_state_saved(filename: str, data_dir: Path) -> None:
-        # Coalesce repeated writes of the same state file: the worker snapshots
-        # the latest durable state, while Telegram uploads remain out of-band.
-        with pending_lock:
-            pending.add((filename, str(data_dir)))
-            pending_event.set()
+            while process_pending():
+                pass
 
     def upload_with_owner_notice(path: Path, *, channel_id=None) -> bool:
         succeeded = original_upload(path, channel_id=channel_id)
@@ -223,7 +239,7 @@ def install(bot_module) -> None:
             bot_module.bot.send_message(
                 call.message.chat.id,
                 "📦 لاستعادة نسخة احتياطية: أعد توجيه ملف ZIP من قناة النسخ إلى هذه المحادثة الخاصة، ثم أرسل /restore. "
-                "سيتم التحقق من رمز البوت والتشفير والمالك، ولن تُستبدل أي سجلات محلية موجودة.",
+                "سيتم التحقق من رمز البوت والتشفير والمال��، ولن تُستبدل أي سجلات محلية موجودة.",
             )
             return
         token = _owner_view.set(owner_button_visible(call.from_user.id))
@@ -235,8 +251,6 @@ def install(bot_module) -> None:
     bot_module.handle_callbacks = callbacks_with_owner_button
     _replace_handler(bot_module.bot.callback_query_handlers, "handle_callbacks", callbacks_with_owner_button)
 
-    # /owner is explicitly rebound to avoid command-filter/registration ordering
-    # issues, and always opens the existing owner dashboard for the owner only.
     def owner_command(message):
         if message.chat.type == "private" and int(message.from_user.id) == OWNER_ID:
             bot_module.bot.send_message(message.chat.id, "لوحة المالك", reply_markup=bot_module._admin_main_keyboard())
@@ -253,8 +267,6 @@ def install(bot_module) -> None:
         lambda message: _restore_document_handler(bot_module, backup_service, message)
     )
 
-    # Add a restoration entry to the existing owner settings, without changing
-    # subscription, appeals, moderation, or downloader flows.
     original_owner_settings = bot_module._owner_settings_keyboard
 
     def owner_settings_with_restore():

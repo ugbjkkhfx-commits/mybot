@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import backup_service as backups
 import owner_backup_integration as integration
@@ -48,6 +48,60 @@ class OwnerBackupIntegrationTests(unittest.TestCase):
             backups.restore_user_archive(archive, 42, requester_id=backups.OWNER_ID, data_dir=Path(temp_dir))
             restored = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(1, restored["users"]["42"]["departure_count"])
+
+    def test_scheduler_accepts_user_ids_and_passes_them_through(self):
+        calls = []
+        schedule, process, _event = integration._make_backup_scheduler(
+            lambda filename, data_dir, user_ids=None: calls.append((filename, data_dir, user_ids))
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schedule("moderation.json", Path(temp_dir), user_ids={7})
+            self.assertEqual(1, process())
+        self.assertEqual([("moderation.json", Path(temp_dir), {7})], calls)
+
+    def test_scheduler_unions_user_ids_for_coalesced_updates(self):
+        calls = []
+        schedule, process, _event = integration._make_backup_scheduler(
+            lambda filename, data_dir, user_ids=None: calls.append(user_ids)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schedule("moderation.json", Path(temp_dir), user_ids={7})
+            schedule("moderation.json", Path(temp_dir), user_ids={8, 9})
+            self.assertEqual(1, process())
+        self.assertEqual([{7, 8, 9}], calls)
+
+    def test_scheduler_preserves_legacy_full_reconciliation_request(self):
+        calls = []
+        schedule, process, _event = integration._make_backup_scheduler(
+            lambda filename, data_dir, user_ids=None: calls.append(user_ids)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schedule("moderation.json", Path(temp_dir))
+            self.assertEqual(1, process())
+        self.assertEqual([None], calls)
+
+    def test_full_reconciliation_request_subsumes_narrower_pending_ids(self):
+        calls = []
+        schedule, process, _event = integration._make_backup_scheduler(
+            lambda filename, data_dir, user_ids=None: calls.append(user_ids)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schedule("moderation.json", Path(temp_dir), user_ids={7})
+            schedule("moderation.json", Path(temp_dir), user_ids=None)
+            schedule("moderation.json", Path(temp_dir), user_ids={8})
+            process()
+        self.assertEqual([None], calls)
+
+    @patch.object(backups, "_upload_pending", return_value=False)
+    def test_failed_upload_keeps_backup_in_retry_queue(self, upload_pending):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            spool = Path(temp_dir) / "telegram_backup_outbox"
+            spool.mkdir()
+            queued = spool / "A_42_20261120T120000.000000Z.zip"
+            queued.write_bytes(b"pending backup bytes")
+            self.assertEqual(0, backups.retry_pending(Path(temp_dir)))
+            upload_pending.assert_called_once_with(queued)
+            self.assertTrue(queued.exists())
 
     @patch.object(backups, "_upload_document", return_value=True)
     def test_outbox_upload_confirms_and_retains_dated_history(self, upload):
