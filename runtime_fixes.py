@@ -49,9 +49,6 @@ def _install_single_upload_policy(backup_service) -> None:
     original_upload_pending = backup_service._upload_pending
 
     def upload_latest_only(path, *args, **kwargs):
-        # Dated archives remain intact in the durable outbox as local history, but
-        # should not be sent now or later by retry_pending. The un-dated latest file
-        # is the single Telegram delivery per user/settings snapshot.
         if _DATED_BACKUP_RE.search(path.name):
             LOG.info("Retaining dated backup locally without uploading: %s", path.name)
             return False
@@ -62,7 +59,7 @@ def _install_single_upload_policy(backup_service) -> None:
 
 
 def _install_registration_write_resilience(module) -> None:
-    """Do not let a user-list persistence failure suppress the /start response."""
+    """Do not let user-list persistence failure suppress the /start response."""
     if getattr(module, "_runtime_registration_resilience_installed", False):
         return
     original_save = module.save_json_set
@@ -81,26 +78,43 @@ def _install_registration_write_resilience(module) -> None:
 
 
 def _install_subscription_prompt_fallback(module) -> None:
-    """Keep forced-subscription gating and show its join/check prompt on API failures."""
+    """Enforce subscription independently of best-effort moderation record writes."""
     if getattr(module, "_runtime_subscription_fallback_installed", False):
         return
 
     def check_access(user, chat_id: int, *, show_prompt: bool = True) -> bool:
-        if int(user.id) == OWNER_ID:
+        user_id = int(user.id)
+        if user_id == OWNER_ID:
             return True
+
+        # Moderation persistence is useful for departure tracking, but an I/O or
+        # schema problem there must not prevent a new user from seeing the bot's
+        # forced-subscription message (or using the bot when no subscription is on).
+        record = {}
         try:
-            module.state_store.update_user_record(user.id, **module._profile(user))
-            record = module._get_record(user.id)
-            if record.get("permanently_banned"):
+            module.state_store.update_user_record(user_id, **module._profile(user))
+        except Exception:
+            LOG.exception("Could not update moderation profile for user_id=%s", user_id)
+        try:
+            record = module._get_record(user_id)
+        except Exception:
+            LOG.exception("Could not load moderation record for user_id=%s; continuing without it", user_id)
+
+        if record.get("permanently_banned"):
+            try:
                 module._send_permanent_ban(chat_id)
-                return False
+            except Exception:
+                LOG.exception("Could not send ban notice to user_id=%s", user_id)
+            return False
+
+        try:
             config = module._subscription_config()
         except Exception:
-            LOG.exception("Could not load access/subscription state for user_id=%s", user.id)
+            LOG.exception("Could not load forced-subscription configuration")
             try:
-                module.bot.send_message(chat_id, "تعذر التحقق من إعدادات الدخول مؤقتًا. حاول مرة أخرى بعد قليل.")
+                module.bot.send_message(chat_id, "تعذر التحقق من إعداد الاشتراك مؤقتًا. حاول مرة أخرى بعد قليل.")
             except Exception:
-                LOG.exception("Could not send access-state error to user_id=%s", user.id)
+                LOG.exception("Could not notify user_id=%s about subscription config failure", user_id)
             return False
 
         if not config.get("enabled"):
@@ -112,9 +126,9 @@ def _install_subscription_prompt_fallback(module) -> None:
                                         reply_markup=module._subscription_keyboard(config))
             return False
         try:
-            member = module.bot.get_chat_member(int(config["chat_id"]), int(user.id))
+            member = module.bot.get_chat_member(int(config["chat_id"]), user_id)
         except Exception:
-            LOG.exception("Membership lookup failed for forced-subscription user_id=%s", user.id)
+            LOG.exception("Membership lookup failed for forced-subscription user_id=%s", user_id)
             if show_prompt:
                 module.bot.send_message(chat_id, module.SUBSCRIPTION_NOTICE,
                                         reply_markup=module._subscription_keyboard(config))
@@ -123,9 +137,9 @@ def _install_subscription_prompt_fallback(module) -> None:
         if module._is_member(member):
             if record.get("temporarily_restricted"):
                 try:
-                    module.state_store.set_temporary_restriction(user.id, False)
+                    module.state_store.set_temporary_restriction(user_id, False)
                 except Exception:
-                    LOG.exception("Could not clear temporary restriction for user_id=%s", user.id)
+                    LOG.exception("Could not clear temporary restriction for user_id=%s", user_id)
             return True
         if show_prompt:
             module.bot.send_message(chat_id, module.SUBSCRIPTION_NOTICE,
@@ -171,7 +185,6 @@ def install(module) -> None:
     _install_single_upload_policy(backup_service)
     _install_registration_write_resilience(module)
     _install_subscription_prompt_fallback(module)
-    # Install async snapshots only after limiting uploads; retry files are retained.
     owner_backup_integration.install(module)
 
     _wrap_handler(module, "handle_start", "تعذر بدء البوت مؤقتًا. حاول مرة أخرى بعد قليل.")
